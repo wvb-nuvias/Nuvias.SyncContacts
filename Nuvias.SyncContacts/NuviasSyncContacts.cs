@@ -120,6 +120,7 @@ namespace Nuvias.SyncContacts
                 //create users when not in db + userprops & userprefs
                 //update users (blocked or updated)
                 //sync subscriptions
+                //test git
 
             }
         }
