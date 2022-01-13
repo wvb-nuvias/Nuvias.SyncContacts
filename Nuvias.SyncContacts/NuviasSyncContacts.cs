@@ -16,15 +16,16 @@ using System.Net.NetworkInformation;
 using System.Globalization;
 using System.Net.Http;
 using Newtonsoft.Json;
-using System.Text.RegularExpressions;
-using System.IO;
 using TeamsHook.NET;
+using MySql.Data.MySqlClient;
 
 namespace Nuvias.SyncContacts
 {
     public partial class NuviasSyncContacts : ServiceBase {
         private static ILogger<NuviasSyncContacts> _logger;
         private static Timer _timer;
+        private static bool MySqlConnected = false;
+        private static MySqlConnection mysqlconnection = default;
 
         public NuviasSyncContacts()
         {
@@ -39,19 +40,14 @@ namespace Nuvias.SyncContacts
             });
             _logger = loggerFactory.CreateLogger<NuviasSyncContacts>();
             _logger.LogInformation(Conf("AppName") + " Started.");
-
-            //start the run timer (runs every x minutes, based on config file)
             _timer = new Timer(new TimerCallback(TickTimer), null, int.Parse(Conf("TimerDelay")), int.Parse(Conf("TimerCheck")));
             _logger.LogInformation("Timer Started.");
         }
 
         protected override void OnStop()
-        {
-            //stop timer
+        {            
             _timer.Change(Timeout.Infinite, Timeout.Infinite);
             _logger.LogInformation("Timer Stopped.");
-
-            //event log stop signal
             _logger.LogInformation("Service Stopped.");
         }
 
@@ -89,16 +85,13 @@ namespace Nuvias.SyncContacts
         {
             bool _online = false;
             bool _executionneeded = false;
-            int i = 0;
-            string lijn = "";
-
-            //check the internet connection (InternetAccessCheckIP)
+            string[] spl = default;
+                        
             try
             {
                 if (Ping(Conf("InternetAccessCheckIP")))
                 {
-                    _online = true;
-                    //_logger.LogInformation("Internet access confirmed.");
+                    _online = true;            
                 }
                 else
                 {
@@ -114,14 +107,90 @@ namespace Nuvias.SyncContacts
             {
                 var cultureInfo = new CultureInfo("nl-BE");
 
+                DateTime last = DateTime.Parse(Conf("LastExecution"), cultureInfo);
+                
+                //TODO if conf executionDys = * (every day!!)
+                if (Conf("ExecutionDays") != "*")
+                {
+                    DateTime now = DateTime.Parse(DateTime.Now.Day.ToString() + "/" + DateTime.Now.Month.ToString() + "/" + DateTime.Now.Year.ToString() + " " + Conf("ExecutionTime"), cultureInfo);
+                    //construct executionDays, based on config value
+                    foreach (string day in Conf("ExecutionDays").Split(','))
+                    {
+                        DateTime dat = DateTime.Parse(day + "/" + DateTime.Now.Month.ToString() + "/" + DateTime.Now.Year.ToString() + " " + Conf("ExecutionTime"), cultureInfo);
 
-                //TODO actions to take when online (sync organisations)
-                //sync contacts
-                //create users when not in db + userprops & userprefs
-                //update users (blocked or updated)
-                //sync subscriptions
-                //test git
+                        string _message = "";
+                        _message += "Now: " + now.ToString("dd/MM/yyyy HH:mm:ss", cultureInfo) + "\r\n";
+                        _message += "Last: " + last.ToString("dd/MM/yyyy HH:mm:ss", cultureInfo) + "\r\n";
+                        _message += "Check: " + dat.ToString("dd/MM/yyyy HH:mm:ss", cultureInfo) + "\r\n";
 
+                        if (now.CompareTo(dat) > 0)
+                        {
+                            _message += "Date is in the past";
+                        }
+                        else if (now.CompareTo(dat) < 0)
+                        {
+                            _message += "Date is in the future";
+                        }
+                        else
+                        {
+                            _message += "Date is today";
+                            //do not run if already run today
+                            if (last.ToString("dd/MM/yyyy") != now.ToString("dd/MM/yyyy"))
+                            {
+                                _executionneeded = true;
+                            }
+                        }
+                    }
+
+                    if (Conf("ExecuteOnStart") == "true")
+                    {
+                        if (last.ToString("dd/MM/yyyy") != now.ToString("dd/MM/yyyy"))
+                        {
+                            _executionneeded = true;
+                        }
+                    }
+                } else
+                {
+                    spl = Conf("ExecutionTime").Split(',');
+                                                            
+                    foreach (string s in spl)
+                    {
+                        if (int.Parse(s) == DateTime.Now.Hour)
+                        {
+                            if (last.Hour != DateTime.Now.Hour)
+                            {
+                                _executionneeded = true;
+                                break;
+                            }
+                        }
+                    }
+
+                }
+
+                if (_executionneeded)
+                {                    
+                    _timer.Change(Timeout.Infinite, Timeout.Infinite);
+
+                    var startexecution = DateTime.Now;
+
+                    MySqlConnect();
+                    if (MySqlConnected)
+                    {                        
+                        SaveOrganisations(AfasOrganisations());
+                        SaveContacts(AfasContacts());
+                        SaveSubscriptions(AfasSubscriptions());
+                    }
+                    MySqlDisconnect();
+
+                    var stopexecution = DateTime.Now;
+                    TimeSpan diff = stopexecution - startexecution;
+                    var tijd = diff.Hours.ToString("00") + ":" + diff.Minutes.ToString("00") + ":" + diff.Seconds.ToString("00");
+
+                    SetConf("LastExecution", DateTime.Now.ToString("dd/MM/yyyy HH:mm:ss", cultureInfo));                    
+                    TeamsMessage("Finished organisations, contacts and subscriptions update, it took " + tijd + ".");
+                                        
+                    _timer.Change(int.Parse(Conf("TimerDelay")), int.Parse(Conf("TimerCheck")));
+                }                
             }
         }
         private static string Base64Encode(string plainText)
@@ -167,6 +236,506 @@ namespace Nuvias.SyncContacts
             }
         }
 
+        private static void MySqlConnect()
+        {
+            mysqlconnection = new MySqlConnection(Conf("IncidentsDataSource"));
+            try
+            {
+                mysqlconnection.Open();
+                MySqlConnected = true;
+                _logger.LogInformation("MySqlConnect : Connection established.\r\nData Source: " + Conf("IncidentsDataSource") + "\r\n");
+            }
+            catch (MySqlException e)
+            {
+                _logger.LogInformation("MySqlConnect : Error Generated. Details: " + e.ToString() + "\r\nData Source: " + Conf("IncidentsDataSource") + "\r\n");
+            }            
+        }
+
+        private static void MySqlDisconnect()
+        {
+            if (MySqlConnected)
+            {
+                mysqlconnection.Close();
+                mysqlconnection = null;
+                MySqlConnected=false;
+                _logger.LogInformation("MySqlDisconnect : Connection Closed.\r\n");
+            }
+        }
+
+        private static void SaveOrganisations(List<AFASOrganisation> lst)
+        {            
+            foreach (AFASOrganisation organisation in lst)
+            {
+                SaveOrganisation(organisation);
+            }            
+        }
+
+        private static void SaveContacts(List<AFASContact> lst) {
+            foreach (AFASContact contact in lst)
+            {
+                SaveContact(contact);
+            }        
+        }
+
+        private static void SaveSubscriptions(List<AFASSubscription> lst)
+        {
+            foreach (AFASSubscription subscription in lst)
+            {
+                SaveSubscription(subscription);
+            }            
+        }
+        
+        private static void SaveOrganisation(AFASOrganisation organisation)
+        {
+            bool exists = false;            
+            string existstr = "";
+            string query = "";
+            string tmp = "Save Organisation\r\n-----------------\r\nOrganisation Id: " + organisation.Nummer + "\r\nOrganisation Name:" + organisation.Naam + "\r\n\r\n";            
+            MySqlCommand cmd = default;
+                        
+            query = "SELECT organisationid FROM organisations WHERE organisationid=@organisationid;";
+            cmd = new MySqlCommand(query, mysqlconnection);
+            cmd.Parameters.AddWithValue("@organisationid", organisation.Nummer);
+
+            try
+            {
+                MySqlDataReader reader = cmd.ExecuteReader();
+                exists = reader.HasRows;
+                reader.Close();
+                reader = null;
+                if (exists)
+                {
+                    existstr = "exists.";
+                }
+                else
+                {
+                    existstr = "does not exist.";
+                }
+                tmp += "Record check for Organisation Id " + organisation.Nummer + " : Record " + existstr + "\r\n";
+            }
+            catch (MySqlException e)
+            {
+                tmp += "Record check : Error Generated. Details: " + e.ToString() + "\r\nQuery : " + query + "\r\n";
+            }
+                        
+            if (exists)
+            {
+                query = "UPDATE organisations SET name=@name, address1=@address1, address2=@address2, address3=@address3, updated_at=@updated_at WHERE organisationid=@organisationid;";
+                cmd = new MySqlCommand(query, mysqlconnection);
+                            
+                cmd.Parameters.AddWithValue("@organisationid", organisation.Nummer);
+                cmd.Parameters.AddWithValue("@name", organisation.Naam);
+                cmd.Parameters.AddWithValue("@address1", organisation.Addressline1);
+                cmd.Parameters.AddWithValue("@address2", organisation.Addressline2);
+                cmd.Parameters.AddWithValue("@address3", organisation.Addressline3);
+                cmd.Parameters.AddWithValue("@updated_at", DateTime.Now.ToString("G"));
+
+                try
+                {
+                    cmd.ExecuteNonQuery();
+                    tmp += "Update record successful.\r\n";
+                }
+                catch (MySqlException e)
+                {
+                    tmp += "Update record : Error Generated. Details: " + e.ToString() + "\r\nQuery : " + query + "\r\n";
+                }                    
+            }
+            else
+            {
+                query = "INSERT INTO organisations (organisationid, name, address1, address2, address3, created_at, updated_at) VALUES(@organisationid, @name, @address1, @address2, @address3, @created_at, @updated_at);";
+                cmd = new MySqlCommand(query, mysqlconnection);
+
+                cmd.Parameters.AddWithValue("@organisationid", organisation.Nummer);
+                cmd.Parameters.AddWithValue("@name", organisation.Naam);
+                cmd.Parameters.AddWithValue("@address1", organisation.Addressline1);
+                cmd.Parameters.AddWithValue("@address2", organisation.Addressline2);
+                cmd.Parameters.AddWithValue("@address3", organisation.Addressline3);
+                cmd.Parameters.AddWithValue("@created_at", DateTime.Now.ToString("G"));
+                cmd.Parameters.AddWithValue("@updated_at", DateTime.Now.ToString("G"));
+
+                try
+                {
+                    cmd.ExecuteNonQuery();
+                    tmp += "Insert record successful.\r\n";
+                }
+                catch (MySqlException e)
+                {
+                    tmp += "Insert record : Error Generated. Details: " + e.ToString() + "\r\nQuery : " + query + "\r\n";
+                }                    
+            }            
+
+            _logger.LogInformation(tmp);
+        }
+
+        private static void SaveContact(AFASContact contact)
+        {
+            int userid = 0;
+            int isnuvias = 0;
+            int isreseller = 0;
+            bool exists = false;
+            string existstr = "";
+            string query = "";
+            string tmp = "Save Contact\r\n-----------------\r\nContact Id: " + contact.Pernumber + "\r\n\r\n";
+            MySqlCommand cmd = default;
+
+            query = "SELECT contactid FROM contacts WHERE contactid=@contactid;";
+            cmd = new MySqlCommand(query, mysqlconnection);
+            cmd.Parameters.AddWithValue("@contactid", contact.Pernumber);
+
+            try
+            {
+                MySqlDataReader reader = cmd.ExecuteReader();
+                exists = reader.HasRows;
+                reader.Close();
+                reader = null;
+                if (exists)
+                {
+                    existstr = "exists.";
+                }
+                else
+                {
+                    existstr = "does not exist.";
+                }
+                tmp += "Record check for Contact Id " + contact.Pernumber + " : Record " + existstr + "\r\n";
+            }
+            catch (MySqlException e)
+            {
+                tmp += "Record check : Error Generated. Details: " + e.ToString() + "\r\nQuery : " + query + "\r\n";
+            }
+
+            if (exists)
+            {
+                query = "UPDATE contacts SET organisation=@organisation, firstname=@firstname, lastname=@lastname, telephone=@telephone, mobile=@mobile, email=@email, `function`=@function, departement=@departement, supportportal_masteruser=@supportportal_masteruser, incident_maycreate=@incident_maycreate, supportportal_access=@supportportal_access, incident_statusmails=@incident_statusmails, updated_at='@updated_at', blocked=@blocked WHERE contactid=@contactid;";
+                cmd = new MySqlCommand(query, mysqlconnection);
+
+                cmd.Parameters.AddWithValue("@contactid", contact.Pernumber);
+                cmd.Parameters.AddWithValue("@organisation", contact.Orgnumber);
+                cmd.Parameters.AddWithValue("@firstname", contact.Voornaam);
+                cmd.Parameters.AddWithValue("@lastname", contact.Achternaam);
+                cmd.Parameters.AddWithValue("@telephone", contact.Telwork);
+                cmd.Parameters.AddWithValue("@mobile", contact.Mobwork);
+                cmd.Parameters.AddWithValue("@email", contact.Mailwork);
+                cmd.Parameters.AddWithValue("@function", contact.Function);
+                cmd.Parameters.AddWithValue("@departement", contact.Department);
+                cmd.Parameters.AddWithValue("@supportportal_masteruser", contact.Supportportal_master_user);
+                cmd.Parameters.AddWithValue("@incident_maycreate", contact.Mag_incident_insturen);
+                cmd.Parameters.AddWithValue("@supportportal_access", contact.Toegang_supportportal);
+                cmd.Parameters.AddWithValue("@incident_statusmails", contact.Incident_statusmails);
+                cmd.Parameters.AddWithValue("@blocked", contact.Blocked);
+                cmd.Parameters.AddWithValue("@updated_at", DateTime.Now.ToString("G"));
+                    
+                try
+                {
+                    cmd.ExecuteNonQuery();
+                    tmp += "Update record successful.\r\n";
+                }
+                catch (MySqlException e)
+                {
+                    tmp += "Update record : Error Generated. Details: " + e.ToString() + "\r\nQuery : " + query + "\r\n";
+                }
+            }
+            else
+            {
+                query = "INSERT INTO contacts (contactid, organisation, firstname, lastname, telephone, mobile, email, `function`, departement, supportportal_masteruser, incident_maycreate, supportportal_access, incident_statusmails, created_at, updated_at, blocked) VALUES (@contactid, @organisation, @firstname, @lastname, @telephone, @mobile, @email, @function, @departement, @supportportal_masteruser, @incident_maycreate, @supportportal_access, @incident_statusmails, @created_at, @updated_at, @blocked);";
+                cmd = new MySqlCommand(query, mysqlconnection);
+
+                cmd.Parameters.AddWithValue("@contactid", contact.Pernumber);
+                cmd.Parameters.AddWithValue("@organisation", contact.Orgnumber);
+                cmd.Parameters.AddWithValue("@firstname", contact.Voornaam);
+                cmd.Parameters.AddWithValue("@lastname", contact.Achternaam);
+                cmd.Parameters.AddWithValue("@telephone", contact.Telwork);
+                cmd.Parameters.AddWithValue("@mobile", contact.Mobwork);
+                cmd.Parameters.AddWithValue("@email", contact.Mailwork);
+                cmd.Parameters.AddWithValue("@function", contact.Function);
+                cmd.Parameters.AddWithValue("@departement", contact.Department);
+                cmd.Parameters.AddWithValue("@supportportal_masteruser", contact.Supportportal_master_user);
+                cmd.Parameters.AddWithValue("@incident_maycreate", contact.Mag_incident_insturen);
+                cmd.Parameters.AddWithValue("@supportportal_access", contact.Toegang_supportportal);
+                cmd.Parameters.AddWithValue("@incident_statusmails", contact.Incident_statusmails);
+                cmd.Parameters.AddWithValue("@blocked", contact.Blocked);
+                cmd.Parameters.AddWithValue("@created_at", DateTime.Now.ToString("G"));
+                cmd.Parameters.AddWithValue("@updated_at", DateTime.Now.ToString("G"));
+                    
+                try
+                {
+                    cmd.ExecuteNonQuery();
+                    tmp += "Insert record successful.\r\n";
+                }
+                catch (MySqlException e)
+                {
+                    tmp += "Insert record : Error Generated. Details: " + e.ToString() + "\r\nQuery : " + query + "\r\n";
+                }
+            }
+                        
+            if (contact.Toegang_supportportal)
+            {                
+                query = "SELECT userid FROM users WHERE organisations=" + contact.Orgnumber + " contact=" + contact.Pernumber;
+                
+                cmd = new MySqlCommand(query, mysqlconnection);
+                cmd.Parameters.AddWithValue("@contactid", contact.Pernumber);
+
+                try
+                {
+                    MySqlDataReader reader = cmd.ExecuteReader();
+                    exists = reader.HasRows;
+                    if (exists)
+                    {
+                        reader.Read();
+                        userid = reader.GetInt32(0);
+                    }                    
+
+                    reader.Close();
+                    reader = null;
+                    if (exists)
+                    {
+                        existstr = "exists.";
+                    }
+                    else
+                    {
+                        existstr = "does not exist.";
+                    }
+                    tmp += "User Record check for Contact Id " + contact.Pernumber + " : Record " + existstr + "\r\n";
+                }
+                catch (MySqlException e)
+                {
+                    tmp += "User Record check : Error Generated. Details: " + e.ToString() + "\r\nQuery : " + query + "\r\n";
+                }
+
+                if (exists)
+                {                    
+                    query = "UPDATE users SET name=@name, email=@email, updated_at=@updated_at, organisations=@organisations, contactid=@contactid, supportportal_masteruser=@supportportal_masteruser, incident_maycreate=@incident_maycreate, supportportal_access=@supportportal_access, incident_statusmails=@incident_statusmails WHERE userid=" + userid;
+                    cmd = new MySqlCommand(query, mysqlconnection);
+
+                    cmd.Parameters.AddWithValue("@name", contact.Voornaam + " " + contact.Achternaam);
+                    cmd.Parameters.AddWithValue("@organisations", contact.Orgnumber);
+                    cmd.Parameters.AddWithValue("@contactid", contact.Pernumber);
+                    cmd.Parameters.AddWithValue("@email", contact.Mailwork);
+                    cmd.Parameters.AddWithValue("@supportportal_masteruser", contact.Supportportal_master_user);
+                    cmd.Parameters.AddWithValue("@incident_maycreate", contact.Mag_incident_insturen);
+                    cmd.Parameters.AddWithValue("@supportportal_access", contact.Toegang_supportportal);
+                    cmd.Parameters.AddWithValue("@incident_statusmails", contact.Incident_statusmails);
+                    cmd.Parameters.AddWithValue("@updated_at", DateTime.Now.ToString("G"));
+
+                    try
+                    {
+                        cmd.ExecuteNonQuery();
+                        tmp += "Update user record successful.\r\n";
+                    }
+                    catch (MySqlException e)
+                    {
+                        tmp += "Update user record : Error Generated. Details: " + e.ToString() + "\r\nQuery : " + query + "\r\n";
+                    }
+                } else 
+                {
+                    int newid;
+
+                    query = "INSERT INTO users (name, email, password, created_at, updated_at, organisations, contactid, supportportal_masteruser, incident_maycreate, supportportal_access, incident_statusmails) VALUES (@name, @email, @password, @created_at, @updated_at, @organisations, @contactid, @supportportal_masteruser, @incident_maycreate, @supportportal_access, @incident_statusmails);";
+                    cmd = new MySqlCommand(query, mysqlconnection);
+
+                    cmd.Parameters.AddWithValue("@name", contact.Voornaam + " " + contact.Achternaam);
+                    cmd.Parameters.AddWithValue("@organisations", contact.Orgnumber);
+                    cmd.Parameters.AddWithValue("@password", "$2y$10$B0.Sqa1Whm6qKRU5J0/9Xe9AosHJfjalRLBYrPoah/rakGmw55Pgi"); //default password 12345678
+                    cmd.Parameters.AddWithValue("@contactid", contact.Pernumber);
+                    cmd.Parameters.AddWithValue("@email", contact.Mailwork);
+                    cmd.Parameters.AddWithValue("@supportportal_masteruser", contact.Supportportal_master_user);
+                    cmd.Parameters.AddWithValue("@incident_maycreate", contact.Mag_incident_insturen);
+                    cmd.Parameters.AddWithValue("@supportportal_access", contact.Toegang_supportportal);
+                    cmd.Parameters.AddWithValue("@incident_statusmails", contact.Incident_statusmails);                    
+                    cmd.Parameters.AddWithValue("@created_at", DateTime.Now.ToString("G"));
+                    cmd.Parameters.AddWithValue("@updated_at", DateTime.Now.ToString("G"));
+
+                    try
+                    {
+                        cmd.ExecuteNonQuery();
+                        newid = (int)cmd.LastInsertedId;
+                        tmp += "Insert user record successful.\r\n";
+                    }
+                    catch (MySqlException e)
+                    {
+                        tmp += "Insert user record : Error Generated. Details: " + e.ToString() + "\r\nQuery : " + query + "\r\n";
+                    }
+                                        
+                    query = "INSERT INTO userprefs (user,name,value,created_at,updated_at) VALUES (" + userid + ",'locale','en',now(),now());";
+                    query += "INSERT INTO userprefs (user,name,value,created_at,updated_at) VALUES (" + userid + ",'theme','dark',now(),now());";
+                    query += "INSERT INTO userprefs (user, name, value, created_at, updated_at) VALUES(" + userid + ", 'incidentstatusarray', '[1,2,3,7]', now(), now());";
+                    
+                    cmd = new MySqlCommand(query, mysqlconnection);
+
+                    try
+                    {
+                        cmd.ExecuteNonQuery();                        
+                        tmp += "Insert userprefs records successful.\r\n";
+                    }
+                    catch (MySqlException e)
+                    {
+                        tmp += "Insert userprefs records : Error Generated. Details: " + e.ToString() + "\r\nQuery : " + query + "\r\n";
+                    }
+                                        
+                    query = "INSERT INTO userproperties (user,name,value,created_at,updated_at,description,hidden) VALUES ("+ userid +",'IsSiteAdmin','0',now(),now(),'',0);";
+                    query += "INSERT INTO userproperties (user,name,value,created_at,updated_at,description,hidden) VALUES ("+ userid +",'IsDeveloper','0',now(),now(),'',0);";
+                    query += "INSERT INTO userproperties (user,name,value,created_at,updated_at,description,hidden) VALUES ("+ userid +",'CanAPI','0',now(),now(),'',0);";
+                    query += "INSERT INTO userproperties (user,name,value,created_at,updated_at,description,hidden) VALUES ("+ userid +",'CanSeeLog','0',now(),now(),'',0);";
+                    query += "INSERT INTO userproperties (user,name,value,created_at,updated_at,description,hidden) VALUES ("+ userid +",'CanReOpen','0',now(),now(),'',0);";
+                    query += "INSERT INTO userproperties (user,name,value,created_at,updated_at,description,hidden) VALUES ("+ userid +",'CanChangeType','0',now(),now(),'',0);";
+                    query += "INSERT INTO userproperties (user,name,value,created_at,updated_at,description,hidden) VALUES ("+ userid +",'CanImpersonate','0',now(),now(),'',0);";
+                    query += "INSERT INTO userproperties (user,name,value,created_at,updated_at,description,hidden) VALUES ("+ userid +",'CanAssign','0',now(),now(),'',0);";
+                    query += "INSERT INTO userproperties (user,name,value,created_at,updated_at,description,hidden) VALUES ("+ userid +",'CanEscalate','0',now(),now(),'',0);";
+                    query += "INSERT INTO userproperties (user,name,value,created_at,updated_at,description,hidden) VALUES ("+ userid +",'CanDeleteIncidents','0',now(),now(),'',0);";
+                    query += "INSERT INTO userproperties (user,name,value,created_at,updated_at,description,hidden) VALUES ("+ userid +",'CanReadIncidents','1',now(),now(),'',0);";
+
+                    if (contact.Orgnumber == 1001051 || contact.Orgnumber == 1010318)
+                    {
+                        isnuvias = 1;
+                        query += "INSERT INTO userproperties (user,name,value,created_at,updated_at,description,hidden) VALUES ("+ userid +",'CanCloseIncidents','1',now(),now(),'',0);";
+                    }
+                    else
+                    {
+	                    query += "INSERT INTO userproperties (user,name,value,created_at,updated_at,description,hidden) VALUES ("+ userid +",'CanCloseIncidents','0',now(),now(),'',0);";
+                    }
+
+                    query += "INSERT INTO userproperties (user,name,value,created_at,updated_at,description,hidden) VALUES (" + userid + ",'IsNuviasDCB','" + isnuvias + "',now(),now(),'',0);";
+                                        
+                    isreseller = AfasSubscriptions().Where(x => x.ResellerNameId == contact.Orgnumber).Count()>1?1:0;
+                    query += "INSERT INTO userproperties (user,name,value,created_at,updated_at,description,hidden) VALUES (" + userid + ",'IsReseller','" + isreseller + "',now(),now(),'',0);";
+
+                    query += "INSERT INTO userproperties (user,name,value,created_at,updated_at,description,hidden) VALUES (" + userid + ",'CanUpdateIncidents','" + contact.Mag_incident_insturen + "',now(),now(),'',0);";
+                    query += "INSERT INTO userproperties (user,name,value,created_at,updated_at,description,hidden) VALUES (" + userid + ",'CanCreateIncidents','" + contact.Mag_incident_insturen + "',now(),now(),'',0);";
+                    query += "INSERT INTO userproperties (user,name,value,created_at,updated_at,description,hidden) VALUES (" + userid + ",'IsAdmin','" + contact.Supportportal_master_user + "',now(),now(),'',0);";
+                    query += "INSERT INTO userproperties (user,name,value,created_at,updated_at,description,hidden) VALUES (" + userid + ",'CanReadPolicyChanges','0',now(),now(),'',0);";
+                    query += "INSERT INTO userproperties (user,name,value,created_at,updated_at,description,hidden) VALUES (" + userid + ",'CanCreatePolicyChanges','0',now(),now(),'',0);";
+                    query += "INSERT INTO userproperties (user,name,value,created_at,updated_at,description,hidden) VALUES (" + userid + ",'CanReadSubscriptions','1',now(),now(),'',0);";
+
+                    cmd = new MySqlCommand(query, mysqlconnection);
+
+                    try
+                    {
+                        cmd.ExecuteNonQuery();
+                        tmp += "Insert userprops records successful.\r\n";
+                    }
+                    catch (MySqlException e)
+                    {
+                        tmp += "Insert userprops records : Error Generated. Details: " + e.ToString() + "\r\nQuery : " + query + "\r\n";
+                    }
+                }
+            }
+            
+            _logger.LogInformation(tmp);
+        }
+
+        private static void SaveSubscription(AFASSubscription subscription)
+        {
+            bool exists = false;
+            string existstr = "";
+            string query = "";
+            string tmp = "Save Subscription\r\n-----------------\r\nSubscription Id: " + subscription.SubNr + "\r\n\r\n";
+            MySqlCommand cmd = default;
+
+            query = "SELECT contractnumber FROM subscriptions WHERE contractnumber=@contractnumber;";
+            cmd = new MySqlCommand(query, mysqlconnection);
+            cmd.Parameters.AddWithValue("@contractnumber", subscription.SubNr);
+
+            try
+            {
+                MySqlDataReader reader = cmd.ExecuteReader();
+                exists = reader.HasRows;
+                reader.Close();
+                reader = null;
+                if (exists)
+                {
+                    existstr = "exists.";
+                }
+                else
+                {
+                    existstr = "does not exist.";
+                }
+                tmp += "Record check for Subscription Id " + subscription.SubNr + " : Record " + existstr + "\r\n";
+            }
+            catch (MySqlException e)
+            {
+                tmp += "Record check : Error Generated. Details: " + e.ToString() + "\r\nQuery : " + query + "\r\n";
+            }
+                        
+            if (exists)
+            {
+                query = "UPDATE subscriptions SET reseller=@reseller, organisation=@organisation, serialnumber=@serialnumber, devicename=@devicename, articlecode=@articlecode, description=@description, trustedip=@trustedip, externalip1=@externalip1, externalip2=@externalip2, externalip3=@externalip3, externalip4=@externalip4, deviceaddress=@deviceaddress, model=@model, startdate=@startdate, enddate=@enddate, updated_at=@updated_at, sla=@sla, sladays=@sladays, startdaterule=@startdaterule, enddaterule=@enddaterule, stopped=@stopped WHERE contractnumber=@contractnumber;";
+                cmd = new MySqlCommand(query, mysqlconnection);
+
+                cmd.Parameters.AddWithValue("@contractnumber", subscription.SubNr);
+                cmd.Parameters.AddWithValue("@reseller", subscription.ResellerNameId);
+                cmd.Parameters.AddWithValue("@organisation", subscription.NameEndUserId);
+                cmd.Parameters.AddWithValue("@serialnumber", subscription.SerialNumber);
+                cmd.Parameters.AddWithValue("@devicename", subscription.DeviceName);
+                cmd.Parameters.AddWithValue("@articlecode", subscription.Code);
+                cmd.Parameters.AddWithValue("@description", subscription.Description);
+                cmd.Parameters.AddWithValue("@trustedip", subscription.TrustedIP);
+                cmd.Parameters.AddWithValue("@externalip1", subscription.ExternalIP1);
+                cmd.Parameters.AddWithValue("@externalip2", subscription.ExternalIP2);
+                cmd.Parameters.AddWithValue("@externalip3", subscription.ExternalIP3);
+                cmd.Parameters.AddWithValue("@externalip4", subscription.ExternalIP4);
+                cmd.Parameters.AddWithValue("@deviceaddress", subscription.DeviceAddress);
+                cmd.Parameters.AddWithValue("@model", subscription.Model);
+                cmd.Parameters.AddWithValue("@startdate", subscription.StartDate);
+                cmd.Parameters.AddWithValue("@enddate", subscription.EndDate);
+                cmd.Parameters.AddWithValue("@sla", subscription.Sla);
+                cmd.Parameters.AddWithValue("@sladays", "");
+                cmd.Parameters.AddWithValue("@startdaterule", subscription.StartDateRule);
+                cmd.Parameters.AddWithValue("@enddaterule", subscription.EndDateRule);
+                cmd.Parameters.AddWithValue("@stopped", 0);
+                cmd.Parameters.AddWithValue("@updated_at", DateTime.Now.ToString("G"));
+
+                try
+                {
+                    cmd.ExecuteNonQuery();
+                    tmp += "Update record successful.\r\n";
+                }
+                catch (MySqlException e)
+                {
+                    tmp += "Update record : Error Generated. Details: " + e.ToString() + "\r\nQuery : " + query + "\r\n";
+                }
+            }
+            else
+            {
+                query = "INSERT INTO subscriptions (reseller, organisation, serialnumber, contractnumber, devicename, articlecode, description, trustedip, externalip1, externalip2, externalip3, externalip4, deviceaddress, model, startdate, enddate, created_at, updated_at, sla, sladays, startdaterule, enddaterule, stopped) VALUES (@reseller, @organisation, @serialnumber, @devicename, @articlecode, @description, @trustedip, @externalip1, @externalip2, @externalip3, @externalip4, @deviceaddress, @model, @startdate, @enddate, @created_at, @updated_at, @sla, @sladays, @startdaterule, @enddaterule, @stopped);";
+                cmd = new MySqlCommand(query, mysqlconnection);
+
+                cmd.Parameters.AddWithValue("@contractnumber", subscription.SubNr);
+                cmd.Parameters.AddWithValue("@reseller", subscription.ResellerNameId);
+                cmd.Parameters.AddWithValue("@organisation", subscription.NameEndUserId);
+                cmd.Parameters.AddWithValue("@serialnumber", subscription.SerialNumber);
+                cmd.Parameters.AddWithValue("@devicename", subscription.DeviceName);
+                cmd.Parameters.AddWithValue("@articlecode", subscription.Code);
+                cmd.Parameters.AddWithValue("@description", subscription.Description);
+                cmd.Parameters.AddWithValue("@trustedip", subscription.TrustedIP);
+                cmd.Parameters.AddWithValue("@externalip1", subscription.ExternalIP1);
+                cmd.Parameters.AddWithValue("@externalip2", subscription.ExternalIP2);
+                cmd.Parameters.AddWithValue("@externalip3", subscription.ExternalIP3);
+                cmd.Parameters.AddWithValue("@externalip4", subscription.ExternalIP4);
+                cmd.Parameters.AddWithValue("@deviceaddress", subscription.DeviceAddress);
+                cmd.Parameters.AddWithValue("@model", subscription.Model);
+                cmd.Parameters.AddWithValue("@startdate", subscription.StartDate);
+                cmd.Parameters.AddWithValue("@enddate", subscription.EndDate);
+                cmd.Parameters.AddWithValue("@sla", subscription.Sla);
+                cmd.Parameters.AddWithValue("@sladays", "");
+                cmd.Parameters.AddWithValue("@startdaterule", subscription.StartDateRule);
+                cmd.Parameters.AddWithValue("@enddaterule", subscription.EndDateRule);
+                cmd.Parameters.AddWithValue("@stopped", 0);
+                cmd.Parameters.AddWithValue("@created_at", DateTime.Now.ToString("G"));
+                cmd.Parameters.AddWithValue("@updated_at", DateTime.Now.ToString("G"));
+
+                try
+                {
+                    cmd.ExecuteNonQuery();
+                    tmp += "Insert record successful.\r\n";
+                }
+                catch (MySqlException e)
+                {
+                    tmp += "Insert record : Error Generated. Details: " + e.ToString() + "\r\nQuery : " + query + "\r\n";
+                }
+            }
+
+            _logger.LogInformation(tmp);
+        }
+                
         private static List<AFASOrganisation> AfasOrganisations()
         {
             string url = Conf("AFASBaseUrl") + "/profitrestservices/connectors/LibreNMS_Organisations?skip=0&take=30000&Orderbyfieldids&filterfieldids&operatortypes";
