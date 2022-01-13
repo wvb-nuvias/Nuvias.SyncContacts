@@ -464,7 +464,7 @@ namespace Nuvias.SyncContacts
                         
             if (contact.Toegang_supportportal)
             {                
-                query = "SELECT userid FROM users WHERE organisations=" + contact.Orgnumber + " contact=" + contact.Pernumber;
+                query = "SELECT userid FROM users WHERE organisations=" + contact.Orgnumber + " AND contact=" + contact.Pernumber;
                 
                 cmd = new MySqlCommand(query, mysqlconnection);
                 cmd.Parameters.AddWithValue("@contactid", contact.Pernumber);
@@ -826,7 +826,7 @@ namespace Nuvias.SyncContacts
                         niew.Department = row.Department;
                         niew.Gender = row.Gender;
                         niew.Incident_statusmails = row.Incident_Statusmails;
-                        niew.Mag_incident_insturen = row.Mag_incident_Insturen;
+                        niew.Mag_incident_insturen = row.Mag_incident_insturen;
                         niew.Mailwork = row.MailWork;
                         niew.Mobwork = row.MobWork;
                         niew.Telwork = row.TelWork;
@@ -881,9 +881,9 @@ namespace Nuvias.SyncContacts
                         niew = new AFASSubscription();
                         niew.SubNr = row.SubNr;
                         niew.NameEndUser = row.NameEndUser;
-                        niew.NameEndUserId = row.NameEndUserId;
+                        niew.NameEndUserId = row.NameEndUserID;
                         niew.ResellerName = row.ResellerName;
-                        niew.ResellerNameId = row.ResellerNameId;
+                        niew.ResellerNameId = row.ResellerNameID;
                         niew.StartDate = row.StartDate;
                         niew.EndDate = row.EndDate;
                         niew.Sla = row.SubType;
