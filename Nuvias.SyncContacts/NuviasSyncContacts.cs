@@ -85,6 +85,7 @@ namespace Nuvias.SyncContacts
         {
             bool _online = false;
             bool _executionneeded = false;
+            string[] spl = default;
                         
             try
             {
@@ -107,45 +108,63 @@ namespace Nuvias.SyncContacts
                 var cultureInfo = new CultureInfo("nl-BE");
 
                 DateTime last = DateTime.Parse(Conf("LastExecution"), cultureInfo);
-                DateTime now = DateTime.Parse(DateTime.Now.Day.ToString() + "/" + DateTime.Now.Month.ToString() + "/" + DateTime.Now.Year.ToString() + " " + Conf("ExecutionTime"), cultureInfo);
-
+                
                 //TODO if conf executionDys = * (every day!!)
-
-                //construct executionDays, based on config value
-                foreach (string day in Conf("ExecutionDays").Split(','))
+                if (Conf("ExecutionDays") != "*")
                 {
-                    DateTime dat = DateTime.Parse(day + "/" + DateTime.Now.Month.ToString() + "/" + DateTime.Now.Year.ToString() + " " + Conf("ExecutionTime"), cultureInfo);
+                    DateTime now = DateTime.Parse(DateTime.Now.Day.ToString() + "/" + DateTime.Now.Month.ToString() + "/" + DateTime.Now.Year.ToString() + " " + Conf("ExecutionTime"), cultureInfo);
+                    //construct executionDays, based on config value
+                    foreach (string day in Conf("ExecutionDays").Split(','))
+                    {
+                        DateTime dat = DateTime.Parse(day + "/" + DateTime.Now.Month.ToString() + "/" + DateTime.Now.Year.ToString() + " " + Conf("ExecutionTime"), cultureInfo);
 
-                    string _message = "";
-                    _message += "Now: " + now.ToString("dd/MM/yyyy HH:mm:ss", cultureInfo) + "\r\n";
-                    _message += "Last: " + last.ToString("dd/MM/yyyy HH:mm:ss", cultureInfo) + "\r\n";
-                    _message += "Check: " + dat.ToString("dd/MM/yyyy HH:mm:ss", cultureInfo) + "\r\n";
+                        string _message = "";
+                        _message += "Now: " + now.ToString("dd/MM/yyyy HH:mm:ss", cultureInfo) + "\r\n";
+                        _message += "Last: " + last.ToString("dd/MM/yyyy HH:mm:ss", cultureInfo) + "\r\n";
+                        _message += "Check: " + dat.ToString("dd/MM/yyyy HH:mm:ss", cultureInfo) + "\r\n";
 
-                    if (now.CompareTo(dat) > 0)
-                    {
-                        _message += "Date is in the past";
+                        if (now.CompareTo(dat) > 0)
+                        {
+                            _message += "Date is in the past";
+                        }
+                        else if (now.CompareTo(dat) < 0)
+                        {
+                            _message += "Date is in the future";
+                        }
+                        else
+                        {
+                            _message += "Date is today";
+                            //do not run if already run today
+                            if (last.ToString("dd/MM/yyyy") != now.ToString("dd/MM/yyyy"))
+                            {
+                                _executionneeded = true;
+                            }
+                        }
                     }
-                    else if (now.CompareTo(dat) < 0)
+
+                    if (Conf("ExecuteOnStart") == "true")
                     {
-                        _message += "Date is in the future";
-                    }
-                    else
-                    {
-                        _message += "Date is today";
-                        //do not run if already run today
                         if (last.ToString("dd/MM/yyyy") != now.ToString("dd/MM/yyyy"))
                         {
                             _executionneeded = true;
                         }
                     }
-                }
-
-                if (Conf("ExecuteOnStart") == "true")
+                } else
                 {
-                    if (last.ToString("dd/MM/yyyy") != now.ToString("dd/MM/yyyy"))
+                    spl = Conf("ExecutionTime").Split(',');
+                                                            
+                    foreach (string s in spl)
                     {
-                        _executionneeded = true;
+                        if (int.Parse(s) == DateTime.Now.Hour)
+                        {
+                            if (last.Hour != DateTime.Now.Hour)
+                            {
+                                _executionneeded = true;
+                                break;
+                            }
+                        }
                     }
+
                 }
 
                 if (_executionneeded)
@@ -167,8 +186,7 @@ namespace Nuvias.SyncContacts
                     TimeSpan diff = stopexecution - startexecution;
                     var tijd = diff.Hours.ToString("00") + ":" + diff.Minutes.ToString("00") + ":" + diff.Seconds.ToString("00");
 
-                    SetConf("LastExecution", DateTime.Now.ToString("dd/MM/yyyy HH:mm:ss", cultureInfo));
-                    //TODO make new teamsmessage hook url and save in config
+                    SetConf("LastExecution", DateTime.Now.ToString("dd/MM/yyyy HH:mm:ss", cultureInfo));                    
                     TeamsMessage("Finished organisations, contacts and subscriptions update, it took " + tijd + ".");
                                         
                     _timer.Change(int.Parse(Conf("TimerDelay")), int.Parse(Conf("TimerCheck")));
