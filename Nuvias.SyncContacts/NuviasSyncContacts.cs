@@ -171,15 +171,15 @@ namespace Nuvias.SyncContacts
                     MySqlConnect();
                     if (MySqlConnected)
                     {
-                        if (Conf("SkipOrganisations") == "true")
+                        if (Conf("SkipOrganisations") == "false")
                         { 
                             SaveOrganisations(AfasOrganisations());
                         }
-                        if (Conf("SkipContacts") == "true")
+                        if (Conf("SkipContacts") == "false")
                         {
                             SaveContacts(AfasContacts());
                         }
-                        if (Conf("SkipSubscriptions") == "true")
+                        if (Conf("SkipSubscriptions") == "false")
                         {
                             SaveSubscriptions(AfasSubscriptions());
                         }
