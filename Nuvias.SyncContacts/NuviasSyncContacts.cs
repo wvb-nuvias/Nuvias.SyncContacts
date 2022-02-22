@@ -170,10 +170,19 @@ namespace Nuvias.SyncContacts
 
                     MySqlConnect();
                     if (MySqlConnected)
-                    {                        
-                        SaveOrganisations(AfasOrganisations());
-                        SaveContacts(AfasContacts());
-                        SaveSubscriptions(AfasSubscriptions());
+                    {
+                        if (Conf("SkipOrganisations") == "true")
+                        { 
+                            SaveOrganisations(AfasOrganisations());
+                        }
+                        if (Conf("SkipContacts") == "true")
+                        {
+                            SaveContacts(AfasContacts());
+                        }
+                        if (Conf("SkipSubscriptions") == "true")
+                        {
+                            SaveSubscriptions(AfasSubscriptions());
+                        }
                     }
                     MySqlDisconnect();
 
@@ -464,10 +473,11 @@ namespace Nuvias.SyncContacts
                         
             if (contact.Toegang_supportportal)
             {                
-                query = "SELECT userid FROM users WHERE organisations=" + contact.Orgnumber + " AND contact=" + contact.Pernumber;
+                query = "SELECT id FROM users WHERE organisations=@organisations AND contactid=@contactid";
                 
                 cmd = new MySqlCommand(query, mysqlconnection);
                 cmd.Parameters.AddWithValue("@contactid", contact.Pernumber);
+                cmd.Parameters.AddWithValue("@organisations", contact.Orgnumber);
 
                 try
                 {
@@ -498,17 +508,13 @@ namespace Nuvias.SyncContacts
 
                 if (exists)
                 {                    
-                    query = "UPDATE users SET name=@name, email=@email, updated_at=@updated_at, organisations=@organisations, contactid=@contactid, supportportal_masteruser=@supportportal_masteruser, incident_maycreate=@incident_maycreate, supportportal_access=@supportportal_access, incident_statusmails=@incident_statusmails WHERE userid=" + userid;
+                    query = "UPDATE users SET updated_at=@updated_at, supportportal_masteruser=@supportportal_masteruser, incident_maycreate=@incident_maycreate, supportportal_access=@supportportal_access, incident_statusmails=@incident_statusmails WHERE id=" + userid;
                     cmd = new MySqlCommand(query, mysqlconnection);
 
-                    cmd.Parameters.AddWithValue("@name", contact.Voornaam + " " + contact.Achternaam);
-                    cmd.Parameters.AddWithValue("@organisations", contact.Orgnumber);
-                    cmd.Parameters.AddWithValue("@contactid", contact.Pernumber);
-                    cmd.Parameters.AddWithValue("@email", contact.Mailwork);
                     cmd.Parameters.AddWithValue("@supportportal_masteruser", contact.Supportportal_master_user);
                     cmd.Parameters.AddWithValue("@incident_maycreate", contact.Mag_incident_insturen);
                     cmd.Parameters.AddWithValue("@supportportal_access", contact.Toegang_supportportal);
-                    cmd.Parameters.AddWithValue("@incident_statusmails", contact.Incident_statusmails);
+                    cmd.Parameters.AddWithValue("@incident_statusmails", contact.Incident_statusmails);                    
                     cmd.Parameters.AddWithValue("@updated_at", DateTime.Now.ToString("G"));
 
                     try
@@ -733,7 +739,7 @@ namespace Nuvias.SyncContacts
                 
         private static List<AFASOrganisation> AfasOrganisations()
         {
-            string url = Conf("AFASBaseUrl") + "/profitrestservices/connectors/LibreNMS_Organisations?skip=0&take=30000&Orderbyfieldids&filterfieldids&operatortypes";
+            string url = Conf("AFASBaseUrl") + "/profitrestservices/connectors/LibreNMS_Organisations?skip=0&take=40000&Orderbyfieldids&filterfieldids&operatortypes";
             List<AFASOrganisation> tmp = new List<AFASOrganisation>();
             AFASOrganisation niew = null;
 
@@ -753,6 +759,8 @@ namespace Nuvias.SyncContacts
                     var response = taskwithmsg.Result;
                     var str = response.Content.ReadAsStringAsync();
                     string res = str.Result;
+
+                    System.IO.File.WriteAllText("C:\\data\\AfasRemoteCmd_Profit\\Nuvias.SyncContacts\\Organisations_Result.json", res);
 
                     dynamic jsonObj = JsonConvert.DeserializeObject(res);
                     int c = jsonObj.rows.Count;
@@ -804,6 +812,8 @@ namespace Nuvias.SyncContacts
                     var response = taskwithmsg.Result;
                     var str = response.Content.ReadAsStringAsync();
                     string res = str.Result;
+
+                    System.IO.File.WriteAllText("C:\\data\\AfasRemoteCmd_Profit\\Nuvias.SyncContacts\\Contacts_Result.json", res);
 
                     dynamic jsonObj = JsonConvert.DeserializeObject(res);
                     int c = jsonObj.rows.Count;
@@ -870,6 +880,8 @@ namespace Nuvias.SyncContacts
                     var response = taskwithmsg.Result;
                     var str = response.Content.ReadAsStringAsync();
                     string res = str.Result;
+
+                    System.IO.File.WriteAllText("C:\\data\\AfasRemoteCmd_Profit\\Nuvias.SyncContacts\\Subscriptions_Result.json", res);
 
                     dynamic jsonObj = JsonConvert.DeserializeObject(res);
                     int c = jsonObj.rows.Count;
