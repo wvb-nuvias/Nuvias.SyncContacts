@@ -813,6 +813,8 @@ namespace Nuvias.SyncContacts
                     var str = response.Content.ReadAsStringAsync();
                     string res = str.Result;
 
+                    System.IO.File.WriteAllText("C:\\data\\AfasRemoteCmd_Profit\\Nuvias.SyncContacts\\Contacts_Result.json", res);
+
                     dynamic jsonObj = JsonConvert.DeserializeObject(res);
                     int c = jsonObj.rows.Count;
 
@@ -878,6 +880,8 @@ namespace Nuvias.SyncContacts
                     var response = taskwithmsg.Result;
                     var str = response.Content.ReadAsStringAsync();
                     string res = str.Result;
+
+                    System.IO.File.WriteAllText("C:\\data\\AfasRemoteCmd_Profit\\Nuvias.SyncContacts\\Subscriptions_Result.json", res);
 
                     dynamic jsonObj = JsonConvert.DeserializeObject(res);
                     int c = jsonObj.rows.Count;
